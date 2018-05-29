@@ -256,40 +256,55 @@ UA_Server_filterEvent(UA_Server *server, const UA_NodeId *eventNode, UA_EventFil
             continue;
         }
 
-        /* type is correct */
-        /* find the variable node with the data being looked for */
+        /* Part 4: 7.4.4.5 SimpleAttributeOperand
+         * The clause can point to any attribute of nodes.
+         * Either a child of the event node and also the event type. */
+        UA_SimpleAttributeOperand *clause = &filter->selectClauses[i];
+
+        UA_BrowsePath bp;
+        UA_BrowsePath_init(&bp);
+        bp.startingNode = *eventNode;
         UA_BrowsePathResult bpr;
-        UA_BrowsePathResult_init(&bpr);
-        UA_Event_findVariableNode(server, filter->selectClauses[i].browsePath,
-                                  filter->selectClauses[i].browsePathSize, eventNode, &bpr);
-        if (bpr.statusCode != UA_STATUSCODE_GOOD || bpr.targetsSize < 1) {
-            UA_Variant_init(&notification->fields.eventFields[i]);
+        if(clause->browsePathSize == 0) {
+            /* If this list is empty the Node is the instance of the TypeDefinition. */
+            UA_RelativePathElement rpe;
+            UA_RelativePathElement_init(&rpe);
+            rpe.referenceTypeId = UA_NODEID_NUMERIC(0, UA_NS0ID_HASTYPEDEFINITION);
+            bpr = UA_Server_translateBrowsePathToNodeIds(server, &bp);
+        } else {
+            /* The list of BrowseNames is equivalent to a RelativePath that
+             * specifies forward references which are subtypes of the
+             * HierarchicalReferences ReferenceType. All Nodes followed by the
+             * browsePath shall be of the NodeClass Object or Variable. */
+
+            UA_STACKARRAY(UA_RelativePathElement, rpe, clause->browsePathSize);
+            memset(rpe, 0, sizeof(UA_RelativePathElement) * clause->browsePathSize);
+            for(size_t j = 0; j < clause->browsePathSize; j++) {
+                rpe[j].referenceTypeId = UA_NODEID_NUMERIC(0, UA_NS0ID_HIERARCHICALREFERENCES);
+                rpe[j].includeSubtypes = true;
+                rpe[j].targetName = clause->browsePath[j];
+            }
+            bp.relativePath.elements = rpe;
+            bp.relativePath.elementsSize = clause->browsePathSize;
+            bpr = UA_Server_translateBrowsePathToNodeIds(server, &bp);
+        }
+
+        if(bpr.statusCode != UA_STATUSCODE_GOOD || bpr.targetsSize == 0) {
+            UA_BrowsePathResult_deleteMembers(&bpr);
             continue;
         }
 
-        /* copy the value */
-        UA_Boolean whereClauseResult = UA_TRUE;
-        UA_Boolean whereClausesUsed = UA_FALSE;     /* placeholder until whereClauses are implemented */
-        UA_StatusCode retval = whereClausesApply(server, filter->whereClause,
-                                                 &notification->fields, &whereClauseResult);
-        if (retval == UA_STATUSCODE_BADNOTSUPPORTED)
-            whereClausesUsed = UA_TRUE;
+        UA_ReadValueId rvi;
+        UA_ReadValueId_init(&rvi);
+        rvi.nodeId = bpr.targets[0].targetId.nodeId;
+        rvi.attributeId = clause->attributeId;
 
-        if(whereClauseResult) {
-            retval = UA_Server_readValue(server, bpr.targets[0].targetId.nodeId,
-                                         &notification->fields.eventFields[i]);
-            if(retval != UA_STATUSCODE_GOOD)
-                UA_Variant_init(&notification->fields.eventFields[i]);
-
-            if(whereClausesUsed)
-                return UA_STATUSCODE_BADNOTSUPPORTED;
-        } else {
-            UA_Variant_init(&notification->fields.eventFields[i]);
-            /* TODO: better statuscode for failing at where clauses */
-            /* EventFilterResult currently isn't being used
-            notification->result.selectClauseResults[i] = UA_STATUSCODE_BADDATAUNAVAILABLE; */
-        }
+        UA_DataValue v = UA_Server_read(server, &rvi, UA_TIMESTAMPSTORETURN_NEITHER);
+        notification->fields.eventFields[i] = v.value;
         UA_BrowsePathResult_deleteMembers(&bpr);
+
+        UA_Boolean whereClauseResult = UA_TRUE;
+        return whereClausesApply(server, filter->whereClause, &notification->fields, &whereClauseResult);
     }
     return UA_STATUSCODE_GOOD;
 }
