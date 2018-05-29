@@ -125,16 +125,6 @@ MonitoredItem_ensureQueueSpace(UA_Server *server, UA_MonitoredItem *mon) {
         TAILQ_INSERT_AFTER(&sub->notificationQueue, del, after_del, globalEntry);
 
 #ifdef UA_ENABLE_SUBSCRIPTIONS_EVENTS
-        /* TODO: provide additional protection for overflowEvents according to specification */
-        /* removing an overflowEvent should not reduce the queueSize */
-        UA_NodeId overflowId = UA_NODEID_NUMERIC(0, UA_NS0ID_SIMPLEOVERFLOWEVENTTYPE);
-        if(del->data.event.fields.eventFieldsSize == 1 &&
-           del->data.event.fields.eventFields->type == &UA_TYPES[UA_TYPES_NODEID] &&
-           UA_NodeId_equal((UA_NodeId *)del->data.event.fields.eventFields->data, &overflowId)) {
-            ++mon->queueSize;
-            ++sub->notificationQueueSize;
-        }
-
         /* Create an overflow notification */
         if(mon->monitoredItemType == UA_MONITOREDITEMTYPE_EVENTNOTIFY) {
             /* EventFilterResult currently isn't being used
@@ -161,6 +151,7 @@ MonitoredItem_ensureQueueSpace(UA_Server *server, UA_MonitoredItem *mon) {
 
             UA_Variant_init(overflowNotification->data.event.fields.eventFields);
             overflowNotification->data.event.fields.eventFieldsSize = 1;
+            UA_NodeId overflowId = UA_NODEID_NUMERIC(0, UA_NS0ID_SIMPLEOVERFLOWEVENTTYPE);
             UA_Variant_setScalarCopy(overflowNotification->data.event.fields.eventFields,
                                      &overflowId, &UA_TYPES[UA_TYPES_NODEID]);
             overflowNotification->mon = mon;
@@ -171,6 +162,9 @@ MonitoredItem_ensureQueueSpace(UA_Server *server, UA_MonitoredItem *mon) {
                 TAILQ_INSERT_TAIL(&mon->queue, overflowNotification, listEntry);
                 TAILQ_INSERT_TAIL(&mon->subscription->notificationQueue, overflowNotification, globalEntry);
             }
+            ++mon->queueSize;
+            ++sub->notificationQueueSize;
+            ++sub->eventNotifications;
         }
 #endif /* UA_ENABLE_SUBSCRIPTIONS_EVENTS */
 
